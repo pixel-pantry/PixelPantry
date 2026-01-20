@@ -188,12 +188,13 @@ struct UpdateCheckResponse: Decodable {
 /// Response from the download endpoint
 struct DownloadResponse: Decodable {
     let downloadUrl: String
-    let expiresAt: String
+    let expiresAt: String?
     let sha256: String?
     let fileSize: Int64?
     let fileName: String?
 
     var expirationDate: Date? {
+        guard let expiresAt = expiresAt else { return nil }
         let formatter = ISO8601DateFormatter()
         return formatter.date(from: expiresAt)
     }

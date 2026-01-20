@@ -14,8 +14,8 @@ public struct Configuration: Sendable {
     /// Base URL for the PixelPantry API
     public let serverURL: URL
 
-    /// Default PixelPantry server URL
-    public static let defaultServerURL = URL(string: "https://pixelpantry.app")!
+    /// Default PixelPantry server URL (direct to Cloud Function)
+    public static let defaultServerURL = URL(string: "https://v1-brotxg67pq-uc.a.run.app")!
 
     /// Initialize a new configuration
     /// - Parameters:
