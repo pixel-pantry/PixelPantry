@@ -178,15 +178,17 @@ actor Installer {
                 .appendingPathComponent(sourceURL.lastPathComponent)
         }
 
-        // Check if we need elevated privileges (sandboxed apps can't write to /Applications)
-        let needsPrivileges = destinationURL.path.hasPrefix("/Applications")
-
-        if needsPrivileges {
-            // Use AppleScript for privileged file operations
-            try await installWithAppleScript(from: sourceURL, to: destinationURL)
-        } else {
-            // Direct file operations for non-privileged locations
+        // Try direct installation first, fall back to AppleScript if permission denied
+        do {
             try await installDirectly(from: sourceURL, to: destinationURL)
+        } catch {
+            // If direct installation fails (likely permission issue), try with admin privileges
+            let errorMessage = error.localizedDescription.lowercased()
+            if errorMessage.contains("permission") || errorMessage.contains("access") || errorMessage.contains("denied") {
+                try await installWithAppleScript(from: sourceURL, to: destinationURL)
+            } else {
+                throw error
+            }
         }
 
         // Relaunch the new app
@@ -200,8 +202,12 @@ actor Installer {
             do {
                 try FileManager.default.trashItem(at: destinationURL, resultingItemURL: nil)
             } catch {
-                // If trash fails, try direct removal
-                try FileManager.default.removeItem(at: destinationURL)
+                // If trash fails, try direct removal - but throw if that also fails
+                do {
+                    try FileManager.default.removeItem(at: destinationURL)
+                } catch {
+                    throw PPError.installationFailed(reason: error.localizedDescription)
+                }
             }
         }
 
