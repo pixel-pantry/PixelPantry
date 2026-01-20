@@ -168,6 +168,7 @@ public final class PixelPantry: @unchecked Sendable {
             let localURL = try await downloader.download(
                 from: downloadURL,
                 expectedSHA256: update.sha256 ?? downloadResponse.sha256,
+                fileName: downloadResponse.fileName,
                 progress: progress
             )
 

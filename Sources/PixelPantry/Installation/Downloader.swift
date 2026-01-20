@@ -8,11 +8,13 @@ actor Downloader {
     /// - Parameters:
     ///   - url: URL to download from
     ///   - expectedSHA256: Expected SHA256 hash (optional, but recommended)
+    ///   - fileName: Optional filename to use (if not provided, extracted from URL)
     ///   - progress: Progress callback (0.0 to 1.0)
     /// - Returns: Local URL of the downloaded file
     func download(
         from url: URL,
         expectedSHA256: String?,
+        fileName: String? = nil,
         progress: @escaping (Double) -> Void
     ) async throws -> URL {
         // Create a temporary directory for this download
@@ -22,9 +24,15 @@ actor Downloader {
 
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
-        // Determine filename from URL
-        let fileName = url.lastPathComponent.isEmpty ? "download" : url.lastPathComponent
-        let destinationURL = tempDir.appendingPathComponent(fileName)
+        // Determine filename - prefer provided name, then try URL, then default
+        let resolvedFileName: String
+        if let providedName = fileName, !providedName.isEmpty {
+            resolvedFileName = providedName
+        } else {
+            let urlFileName = url.lastPathComponent
+            resolvedFileName = urlFileName.isEmpty || urlFileName == "/" ? "download.zip" : urlFileName
+        }
+        let destinationURL = tempDir.appendingPathComponent(resolvedFileName)
 
         // Download using delegate for progress
         let delegate = DownloadDelegate(progress: progress)
