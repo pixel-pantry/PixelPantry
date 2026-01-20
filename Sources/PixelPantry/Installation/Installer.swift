@@ -178,6 +178,22 @@ actor Installer {
                 .appendingPathComponent(sourceURL.lastPathComponent)
         }
 
+        // Check if we need elevated privileges (sandboxed apps can't write to /Applications)
+        let needsPrivileges = destinationURL.path.hasPrefix("/Applications")
+
+        if needsPrivileges {
+            // Use AppleScript for privileged file operations
+            try await installWithAppleScript(from: sourceURL, to: destinationURL)
+        } else {
+            // Direct file operations for non-privileged locations
+            try await installDirectly(from: sourceURL, to: destinationURL)
+        }
+
+        // Relaunch the new app
+        await relaunchApp(at: destinationURL)
+    }
+
+    private func installDirectly(from sourceURL: URL, to destinationURL: URL) async throws {
         // Remove old app (if replacing)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             // Move to trash instead of delete for safety
@@ -195,9 +211,32 @@ actor Installer {
         } catch {
             throw PPError.installationFailed(reason: "Failed to copy app: \(error.localizedDescription)")
         }
+    }
 
-        // Relaunch the new app
-        await relaunchApp(at: destinationURL)
+    private func installWithAppleScript(from sourceURL: URL, to destinationURL: URL) async throws {
+        // Escape paths for AppleScript
+        let sourcePath = sourceURL.path.replacingOccurrences(of: "\"", with: "\\\"")
+        let destPath = destinationURL.path.replacingOccurrences(of: "\"", with: "\\\"")
+        let destDir = destinationURL.deletingLastPathComponent().path.replacingOccurrences(of: "\"", with: "\\\"")
+
+        // Build AppleScript to remove old and copy new with admin privileges
+        let script = """
+        do shell script "rm -rf '\(destPath)' && cp -R '\(sourcePath)' '\(destDir)/'" with administrator privileges
+        """
+
+        var error: NSDictionary?
+        let appleScript = NSAppleScript(source: script)
+
+        // Run on main thread since NSAppleScript needs it for the auth dialog
+        let success = await MainActor.run { () -> Bool in
+            let result = appleScript?.executeAndReturnError(&error)
+            return result != nil
+        }
+
+        if !success {
+            let errorMessage = error?[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+            throw PPError.installationFailed(reason: "Installation failed: \(errorMessage)")
+        }
     }
 
     @MainActor
