@@ -305,40 +305,48 @@ actor Installer {
     }
 
     private func installWithAppleScript(from sourceURL: URL, to destinationURL: URL) async throws {
-        // Escape paths for shell - escape single quotes by ending the quote, adding escaped quote, starting new quote
-        func shellEscape(_ path: String) -> String {
-            return path.replacingOccurrences(of: "'", with: "'\\''")
+        // Use osascript directly via Process - more reliable than NSAppleScript
+        let destPath = destinationURL.path
+        let sourcePath = sourceURL.path
+        let destDir = destinationURL.deletingLastPathComponent().path
+
+        // Build the shell command
+        let shellCommand = "rm -rf '\(destPath.replacingOccurrences(of: "'", with: "'\\''"))' && cp -R '\(sourcePath.replacingOccurrences(of: "'", with: "'\\''"))' '\(destDir.replacingOccurrences(of: "'", with: "'\\''"))/'"
+
+        let script = "do shell script \"\(shellCommand.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
+
+        print("[PixelPantry] Running AppleScript: \(script)")
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+
+        let errorPipe = Pipe()
+        let outputPipe = Pipe()
+        task.standardError = errorPipe
+        task.standardOutput = outputPipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            print("[PixelPantry] Failed to run osascript: \(error)")
+            throw PPError.installationFailed(reason: "Failed to run installer: \(error.localizedDescription)")
         }
 
-        let sourcePath = shellEscape(sourceURL.path)
-        let destPath = shellEscape(destinationURL.path)
-        let destDir = shellEscape(destinationURL.deletingLastPathComponent().path)
+        if task.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorMessage = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            print("[PixelPantry] osascript failed with status \(task.terminationStatus): \(errorMessage)")
 
-        // Build AppleScript to remove old and copy new with admin privileges
-        let script = """
-        do shell script "rm -rf '\\(destPath)' && cp -R '\\(sourcePath)' '\\(destDir)/'" with administrator privileges
-        """
-
-        var error: NSDictionary?
-        let appleScript = NSAppleScript(source: script)
-
-        // Run on main thread since NSAppleScript needs it for the auth dialog
-        let success = await MainActor.run { () -> Bool in
-            let result = appleScript?.executeAndReturnError(&error)
-            return result != nil
-        }
-
-        if !success {
-            let errorNumber = error?[NSAppleScript.errorNumber] as? Int ?? 0
-            let errorMessage = error?[NSAppleScript.errorMessage] as? String ?? "Unknown error"
-
-            // Error -128 means user cancelled
-            if errorNumber == -128 {
+            if errorMessage.contains("-128") || errorMessage.contains("User canceled") {
                 throw PPError.installationFailed(reason: "Installation cancelled by user")
             }
 
             throw PPError.installationFailed(reason: "Installation failed: \(errorMessage)")
         }
+
+        print("[PixelPantry] osascript completed successfully")
     }
 
     @MainActor
