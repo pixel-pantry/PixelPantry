@@ -180,19 +180,26 @@ actor Installer {
 
         // Try direct installation first
         do {
+            print("[PixelPantry] Attempting direct installation to: \(destinationURL.path)")
             try await installDirectly(from: sourceURL, to: destinationURL)
+            print("[PixelPantry] Direct installation succeeded")
             // Relaunch the new app
             await relaunchApp(at: destinationURL)
         } catch {
+            print("[PixelPantry] Direct installation failed: \(error.localizedDescription)")
             // If direct installation fails, try AppleScript with admin privileges
             let errorMessage = error.localizedDescription.lowercased()
-            if errorMessage.contains("permission") || errorMessage.contains("access") || errorMessage.contains("denied") {
+            if errorMessage.contains("permission") || errorMessage.contains("access") || errorMessage.contains("denied") || errorMessage.contains("couldn't be removed") {
                 do {
+                    print("[PixelPantry] Attempting AppleScript installation with admin privileges")
                     try await installWithAppleScript(from: sourceURL, to: destinationURL)
+                    print("[PixelPantry] AppleScript installation succeeded")
                     // Relaunch the new app
                     await relaunchApp(at: destinationURL)
                 } catch {
-                    // AppleScript also failed (likely sandboxed) - fall back to manual install
+                    print("[PixelPantry] AppleScript installation failed: \(error.localizedDescription)")
+                    // AppleScript also failed - fall back to manual install
+                    print("[PixelPantry] Falling back to manual installation")
                     try await manualInstall(from: sourceURL, to: destinationURL)
                 }
             } else {
@@ -203,37 +210,60 @@ actor Installer {
 
     /// Manual installation - copy to user-accessible location and prompt user
     private func manualInstall(from sourceURL: URL, to destinationURL: URL) async throws {
-        // Copy to Downloads folder (accessible to sandboxed apps)
-        let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        // Try multiple locations in order of preference
+        let possibleLocations = [
+            FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
+            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+            FileManager.default.temporaryDirectory
+        ].compactMap { $0 }
 
-        let downloadDestination = downloadsURL.appendingPathComponent(sourceURL.lastPathComponent)
+        var copyDestination: URL?
+        var copyError: Error?
 
-        // Remove existing file if present
-        if FileManager.default.fileExists(atPath: downloadDestination.path) {
-            try? FileManager.default.removeItem(at: downloadDestination)
+        for location in possibleLocations {
+            let destination = location.appendingPathComponent(sourceURL.lastPathComponent)
+
+            // Remove existing file if present
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try? FileManager.default.removeItem(at: destination)
+            }
+
+            do {
+                try FileManager.default.copyItem(at: sourceURL, to: destination)
+                copyDestination = destination
+                print("[PixelPantry] Copied update to: \(destination.path)")
+                break
+            } catch {
+                copyError = error
+                print("[PixelPantry] Failed to copy to \(location.path): \(error.localizedDescription)")
+                continue
+            }
         }
 
-        // Copy the app to Downloads
-        try FileManager.default.copyItem(at: sourceURL, to: downloadDestination)
+        guard let finalDestination = copyDestination else {
+            throw PPError.installationFailed(reason: "Could not copy update: \(copyError?.localizedDescription ?? "Unknown error")")
+        }
 
         // Show in Finder and display instructions
         await MainActor.run {
             // Reveal in Finder
-            NSWorkspace.shared.selectFile(downloadDestination.path, inFileViewerRootedAtPath: "")
+            NSWorkspace.shared.selectFile(finalDestination.path, inFileViewerRootedAtPath: "")
+
+            // Determine folder name for message
+            let folderName = finalDestination.deletingLastPathComponent().lastPathComponent
 
             // Show instructions alert
             let alert = NSAlert()
             alert.messageText = "Update Downloaded"
             alert.informativeText = """
-            The new version has been downloaded to your Downloads folder.
+            The new version has been saved to your \(folderName) folder.
 
             To complete the update:
             1. Quit this app
             2. Drag the new "\(sourceURL.lastPathComponent)" to your Applications folder (replacing the old version)
             3. Open the app from Applications
 
-            The Downloads folder is now open in Finder.
+            The folder is now open in Finder.
             """
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Quit App")
