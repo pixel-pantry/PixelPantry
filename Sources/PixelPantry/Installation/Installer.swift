@@ -178,21 +178,76 @@ actor Installer {
                 .appendingPathComponent(sourceURL.lastPathComponent)
         }
 
-        // Try direct installation first, fall back to AppleScript if permission denied
+        // Try direct installation first
         do {
             try await installDirectly(from: sourceURL, to: destinationURL)
+            // Relaunch the new app
+            await relaunchApp(at: destinationURL)
         } catch {
-            // If direct installation fails (likely permission issue), try with admin privileges
+            // If direct installation fails, try AppleScript with admin privileges
             let errorMessage = error.localizedDescription.lowercased()
             if errorMessage.contains("permission") || errorMessage.contains("access") || errorMessage.contains("denied") {
-                try await installWithAppleScript(from: sourceURL, to: destinationURL)
+                do {
+                    try await installWithAppleScript(from: sourceURL, to: destinationURL)
+                    // Relaunch the new app
+                    await relaunchApp(at: destinationURL)
+                } catch {
+                    // AppleScript also failed (likely sandboxed) - fall back to manual install
+                    try await manualInstall(from: sourceURL, to: destinationURL)
+                }
             } else {
                 throw error
             }
         }
+    }
 
-        // Relaunch the new app
-        await relaunchApp(at: destinationURL)
+    /// Manual installation - copy to user-accessible location and prompt user
+    private func manualInstall(from sourceURL: URL, to destinationURL: URL) async throws {
+        // Copy to Downloads folder (accessible to sandboxed apps)
+        let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+
+        let downloadDestination = downloadsURL.appendingPathComponent(sourceURL.lastPathComponent)
+
+        // Remove existing file if present
+        if FileManager.default.fileExists(atPath: downloadDestination.path) {
+            try? FileManager.default.removeItem(at: downloadDestination)
+        }
+
+        // Copy the app to Downloads
+        try FileManager.default.copyItem(at: sourceURL, to: downloadDestination)
+
+        // Show in Finder and display instructions
+        await MainActor.run {
+            // Reveal in Finder
+            NSWorkspace.shared.selectFile(downloadDestination.path, inFileViewerRootedAtPath: "")
+
+            // Show instructions alert
+            let alert = NSAlert()
+            alert.messageText = "Update Downloaded"
+            alert.informativeText = """
+            The new version has been downloaded to your Downloads folder.
+
+            To complete the update:
+            1. Quit this app
+            2. Drag the new "\(sourceURL.lastPathComponent)" to your Applications folder (replacing the old version)
+            3. Open the app from Applications
+
+            The Downloads folder is now open in Finder.
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Quit App")
+            alert.addButton(withTitle: "Later")
+
+            if let appIcon = NSApp.applicationIconImage {
+                alert.icon = appIcon
+            }
+
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                NSApplication.shared.terminate(nil)
+            }
+        }
     }
 
     private func installDirectly(from sourceURL: URL, to destinationURL: URL) async throws {
